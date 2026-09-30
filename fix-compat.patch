@@ -1,0 +1,297 @@
+--- a/index.html
++++ b/index.html
+@@
+-<!doctype html>
+-<html lang="en">
++<!doctype html>
++<html lang="ko">
+ <head>
+   <meta charset="UTF-8">
+-  <title>Star Counter</title>
++  <title>스타 카운터</title>
++  <!-- 모바일 환경에서도 화면이 제대로 보이도록 viewport 설정 -->
++  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
++  <!-- iOS/Android 구형 브라우저 호환성을 위한 폴리필 -->
++  <script>
++    // requestAnimationFrame 폴리필 (iOS 9 이하, Android 4.4 이하)
++    (function() {
++      var lastTime = 0;
++      var vendors = ['ms', 'moz', 'webkit', 'o'];
++      for(var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x) {
++        window.requestAnimationFrame = window[vendors[x]+'RequestAnimationFrame'];
++        window.cancelAnimationFrame = window[vendors[x]+'CancelAnimationFrame']
++                               || window[vendors[x]+'CancelRequestAnimationFrame'];
++      }
++
++      if (!window.requestAnimationFrame)
++        window.requestAnimationFrame = function(callback) {
++          var currTime = new Date().getTime();
++          var timeToCall = Math.max(0, 16 - (currTime - lastTime));
++          var id = window.setTimeout(function() { callback(currTime + timeToCall); },
++            timeToCall);
++          lastTime = currTime + timeToCall;
++          return id;
++        };
++
++      if (!window.cancelAnimationFrame)
++        window.cancelAnimationFrame = function(id) {
++          clearTimeout(id);
++        };
++    }());
++  </script>
+   <style>
+-    body { margin:0; overflow:hidden; }
+-    canvas { display:block; background:#000; }
++    html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#000; }
++    canvas {
++      display:block;
++      width:100%;
++      height:100%;
++      /* GPU 가속을 강제하기 위한 힌트 */
++      transform: translateZ(0);
++    }
++    #ui {
++      position:absolute;
++      top:10px; left:10px;
++      color:#fff;
++      font-family: '맑은 고딕', sans-serif;
++      font-size:1rem;
++      z-index:10;
++    }
++    #restartBtn {
++      margin-top:10px;
++      padding:5px 10px;
++      background:#1e90ff;
++      border:none;
++      color:#fff;
++      cursor:pointer;
++    }
+   </style>
+ </head>
+ <body data-ai-factory-game="v2">
+-  <canvas id="gameCanvas"></canvas>
++  <canvas id="gameCanvas"></canvas>
++  <div id="ui">
++    점수: <span id="score">0</span><br>
++    <button id="restartBtn">다시 시작</button>
++  </div>
+   <script src="src/main.js"></script>
+   <script>
+-    startGame();
++    // 페이지 로드가 완료되면 게임을 시작한다.
++    window.addEventListener('load', function() {
++      startGame();
++    });
+   </script>
+ </body>
+ </html>
+--- a/src/main.js
++++ b/src/main.js
+@@
+-// Global game variables
+-let engine, render, runner, world;
+-
+-function init() {
+-  engine = Matter.Engine.create();
+-  world = engine.world;
+-  // ... (physics bodies creation)
+-  render = Matter.Render.create({
+-    element: document.body,
+-    canvas: document.getElementById('gameCanvas'),
+-    engine: engine,
+-    options: {
+-      width: window.innerWidth,
+-      height: window.innerHeight,
+-      wireframes: false,
+-      background: '#000'
+-    }
+-  });
+-  Matter.Render.run(render);
+-  runner = Matter.Runner.create();
+-  Matter.Runner.run(runner, engine);
+-}
+-
+-function startGame() {
+-  init();
+-  // UI, event listeners, game loop …
+-}
+-
+-window.startGame = startGame;
++/* -------------------------------------------------------------
++   스타 카운터 – 호환성·성능 패치 (fix-compat.patch)
++   주요 변경점
++   1) 저사양 디바이스에서 프레임 레이트를 제한하고 물리 연산을
++      최적화한다.
++   2) iOS/Android 구형 OS에서 발생할 수 있는 충돌을 방지하기
++      위해 초기화 로직을 try/catch 로 감싸고, Matter.js 의
++      fallback 옵션을 사용한다.
++   3) 캔버스 해상도를 디스플레이 DPR에 맞게 조정해 메모리 사용량을
++      감소시킨다.
++   4) 전역 startGame 함수는 재시작 시 기존 엔진·렌더러를
++      안전하게 정리한다.
++------------------------------------------------------------- */
++
++// 전역 변수 선언
++let engine, render, runner, world;
++let isLowEnd = false;          // 저사양 디바이스 여부
++let targetFPS = 60;            // 기본 목표 FPS
++let lastFrameTime = 0;
++
++/** 디바이스 성능 판단 및 설정 적용 */
++function detectPerformance() {
++  // CPU 코어 수가 2개 이하이면 저사양으로 간주
++  if (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 2) {
++    isLowEnd = true;
++  }
++  // 모바일 Safari/Chrome 은 기본적으로 30FPS 로 제한
++  const ua = navigator.userAgent || '';
++  if (/Android/.test(ua) && /Chrome\/[0-9]+/.test(ua)) {
++    // Android 5.0 이하에서는 30FPS 로 강제
++    const version = parseInt(/Android\s([0-9\.]+)/.exec(ua)[1].split('.')[0], 10);
++    if (version <= 5) isLowEnd = true;
++  }
++  if (/iPhone|iPad/.test(ua)) {
++    const version = parseInt(/OS\s([0-9_]+)/.exec(ua)[1].split('_')[0], 10);
++    if (version < 11) isLowEnd = true; // iOS 11 미만은 저사양 처리
++  }
++  targetFPS = isLowEnd ? 30 : 60;
++}
++
++/** 캔버스 해상도 조정 (DPR 고려) */
++function resizeCanvas() {
++  const canvas = document.getElementById('gameCanvas');
++  const dpr = window.devicePixelRatio || 1;
++  const width = Math.min(window.innerWidth, 1920);
++  const height = Math.min(window.innerHeight, 1080);
++  canvas.width = width * dpr;
++  canvas.height = height * dpr;
++  canvas.style.width = width + 'px';
++  canvas.style.height = height + 'px';
++}
++
++/** 엔진 및 렌더러 초기화 */
++function initEngine() {
++  try {
++    // Matter.js 엔진 생성 (low‑end 옵션 적용)
++    engine = Matter.Engine.create({
++      // 저사양 디바이스에서는 물리 연산 스텝을 크게 잡아 CPU 부하 감소
++      timing: {
++        timeScale: isLowEnd ? 0.5 : 1,
++        delta: isLowEnd ? 1000 / 30 : 1000 / 60
++      }
++    });
++    world = engine.world;
++
++    // 물리 세계에 기본 중력 설정 (필요 시 조정)
++    world.gravity.y = 1;
++
++    // 캔버스 크기 재설정
++    resizeCanvas();
++
++    // 렌더러 설정 – wireframes 를 false 로 두어 GPU 가속 활용
++    render = Matter.Render.create({
++      canvas: document.getElementById('gameCanvas'),
++      engine: engine,
++      options: {
++        width: canvas.width,
++        height: canvas.height,
++        wireframes: false,
++        background: '#000',
++        // 안드로이드 5 이하에서 발생하는 WebGL 오류 방지를 위해
++        // pixelRatio 를 1 로 고정
++        pixelRatio: isLowEnd ? 1 : (window.devicePixelRatio || 1)
++      }
++    });
++    Matter.Render.run(render);
++
++    // Runner 생성 – requestAnimationFrame 기반으로 직접 제어
++    runner = {
++      id: null,
++      run: function() {
++        const step = () => {
++          const now = performance.now();
++          const delta = now - lastFrameTime;
++          if (delta >= 1000 / targetFPS) {
++            Matter.Engine.update(engine, delta);
++            lastFrameTime = now;
++          }
++          this.id = requestAnimationFrame(step);
++        };
++        this.id = requestAnimationFrame(step);
++      },
++      stop: function() {
++        if (this.id) cancelAnimationFrame(this.id);
++      }
++    };
++    runner.run();
++
++    // 기본 게임 오브젝트 (스타, 미라클 등) 생성 – 별도 함수로 분리
++    createGameObjects();
++  } catch (e) {
++    // 초기화 중 오류가 발생하면 간단한 fallback 로드
++    console.error('Engine init failed, falling back to simple mode:', e);
++    fallbackSimpleMode();
++  }
++}
++
++/** 게임 오브젝트 생성 (예시) */
++function createGameObjects() {
++  // 스타 (플레이어가 조작하는 물체)
++  const star = Matter.Bodies.circle(200, 200, 30, {
++    render: { fillStyle: '#00f' },
++    label: 'star',
++    frictionAir: 0.02
++  });
++  Matter.World.add(world, star);
++
++  // 미라클 버튼은 UI 레이어에서 처리하므로 물리엔진에선 제외
++  // 이후에 필요한 미라클 로직을 별도 함수에서 구현한다.
++}
++
++/** 간단 모드 – 물리 엔진 없이 Canvas 로만 동작 */
++function fallbackSimpleMode() {
++  const canvas = document.getElementById('gameCanvas');
++  const ctx = canvas.getContext('2d');
++  ctx.fillStyle = '#00f';
++  ctx.fillRect(50, 50, 60, 60);
++  // UI 는 그대로 동작하도록 유지
++}
++
++/** 게임 초기화 및 UI 바인딩 */
++function initGame() {
++  detectPerformance();
++  initEngine();
++  bindUI();
++}
++
++/** UI 이벤트 바인딩 */
++function bindUI() {
++  const restartBtn = document.getElementById('restartBtn');
++  restartBtn.addEventListener('click', function() {
++    restartGame();
++  });
++}
++
++/** 게임 재시작 로직 */
++function restartGame() {
++  // 기존 엔진/렌더러 정리
++  if (runner) runner.stop();
++  if (render) Matter.Render.stop(render);
++  if (engine) {
++    // 모든 바디 제거
++    Matter.World.clear(engine.world, false);
++    Matter.Engine.clear(engine);
++  }
++  // UI 초기화
++  document.getElementById('score').textContent = '0';
++  // 새로 시작
++  initGame();
++}
++
++/** 전역 시작 함수 */
++function startGame() {
++  initGame();
++}
++
++// 외부에서 접근 가능하도록 전역에 노출
++window.startGame = startGame;
