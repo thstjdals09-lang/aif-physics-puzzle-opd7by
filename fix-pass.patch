@@ -1,0 +1,520 @@
+diff --git a/index.html b/index.html
+new file mode 100644
+index 0000000..e69691a
+--- /dev/null
++++ b/index.html
+@@ -0,0 +1,1 @@
+-<!doctype html><html><head><title>Star Counter</title></head><body data-ai-factory-game="v2"></body></html>
+\ No newline at end of file
+diff --git a/index.html b/index.html
+index e69691a..b1a2c3d 100644
+--- a/index.html
++++ b/index.html
+@@ -1,1 +1,487 @@
+-<!doctype html><html><head><title>Star Counter</title></head><body data-ai-factory-game="v2"></body></html>
++<!doctype html>
++<html lang="ko">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>스타 카운터</title>
++  <style>
++    * { margin: 0; padding: 0; box-sizing: border-box; }
++    html, body { height: 100%; overflow: hidden; font-family: '맑은 고딕', sans-serif; background: #000; color: #fff; }
++    body[data-ai-factory-game="v2"] { display: flex; flex-direction: column; align-items: center; justify-content: center; }
++    #gameCanvas { background: radial-gradient(circle at center, #0a0a2a 0%, #000 100%); display: block; }
++    .ui-panel { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; padding: 10px; z-index: 10; }
++    .score-display { font-size: 18px; color: #ff4444; text-shadow: 0 0 5px #ff0000; }
++    .miracle-panel { display: flex; gap: 8px; flex-wrap: wrap; }
++    .miracle-btn { background: #1a1a4a; border: 2px solid #ff4444; color: #ffaaaa; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
++    .miracle-btn:hover { background: #ff4444; color: #fff; }
++    .miracle-btn.active { box-shadow: 0 0 10px #ff0000; }
++    .control-hint { position: absolute; bottom: 10px; left: 0; right: 0; text-align: center; color: #aaa; font-size: 13px; }
++    .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.8); z-index: 20; }
++    .overlay button { background: #ff4444; color: #fff; border: none; padding: 12px 24px; font-size: 18px; border-radius: 8px; cursor: pointer; margin-top: 20px; }
++    .win-text { color: #ffaaaa; font-size: 28px; text-shadow: 0 0 10px #ff0000; }
++    .lose-text { color: #aaaaff; font-size: 28px; text-shadow: 0 0 10px #0000ff; }
++  </style>
++</head>
++<body data-ai-factory-game="v2">
++  <canvas id="gameCanvas"></canvas>
++  <div class="ui-panel">
++    <div class="score-display">점수: <span id="score">0</span></div>
++    <div class="miracle-panel" id="miraclePanel"></div>
++  </div>
++  <div class="control-hint">마우스 드래그로 스타 경로를 조절하세요. 미라클 버튼을 눌러 발사하세요.</div>
++  <div class="overlay" id="overlay" style="display:none;">
++    <div id="overlayText"></div>
++    <button id="restartBtn">재시작</button>
++  </div>
++
++  <script>
++    const canvas = document.getElementById('gameCanvas');
++    const ctx = canvas.getContext('2d');
++    const scoreEl = document.getElementById('score');
++    const miraclePanel = document.getElementById('miraclePanel');
++    const overlay = document.getElementById('overlay');
++    const overlayText = document.getElementById('overlayText');
++    const restartBtn = document.getElementById('restartBtn');
++
++    let gameState = 'playing'; // playing, won, lost
++    let score = 0;
++    let stars = [];
++    let miracles = [];
++    let activeMiracle = null;
++    let dragStart = null;
++    let dragEnd = null;
++    let target = null;
++    let particles = [];
++    let combo = 0;
++    let miracleQueue = [];
++    let miracleTypes = [
++      { id: 'speed', name: '스피드', color: '#ff8800', desc: '스타 속도 증가' },
++      { id: 'split', name: '스플릿', color: '#ff00ff', desc: '스타 분열' },
++      { id: 'homing', name: '호밍', color: '#00ffff', desc: '타겟 유도' },
++      { id: 'bomb', name: '폭탄', color: '#ff0000', desc: '범위 피해' }
++    ];
++
++    function resize() {
++      canvas.width = window.innerWidth;
++      canvas.height = window.innerHeight;
++    }
++    window.addEventListener('resize', resize);
++    resize();
++
++    function createStar(x, y) {
++      return {
++        x: x, y: y, vx: 0, vy: 0, radius: 12,
++        color: '#44aaff', trail: []
++      };
++    }
++
++    function createMiracle(x, y, type) {
++      return {
++        x: x, y: y, type: type, radius: 8, life: 60,
++        vx: 0, vy: 0, target: null
++      };
++    }
++
++    function createParticle(x, y, color) {
++      return {
++        x: x, y: y, vx: (Math.random()-0.5)*4, vy: (Math.random()-0.5)*4,
++        radius: Math.random()*3+1, life: 30, color: color
++      };
++    }
++
++    function setupMiracleButtons() {
++      miraclePanel.innerHTML = '';
++      miracleTypes.forEach((m, i) => {
++        const btn = document.createElement('button');
++        btn.className = 'miracle-btn';
++        btn.textContent = m.name;
++        btn.dataset.type = m.id;
++        btn.style.borderColor = m.color;
++        btn.addEventListener('click', () => {
++          miracleTypes.forEach(b => b.btn.classList.remove('active'));
++          btn.classList.add('active');
++          activeMiracle = m.id;
++        });
++        m.btn = btn;
++        miraclePanel.appendChild(btn);
++      });
++      // Select first by default
++      miracleTypes[0].btn.classList.add('active');
++      activeMiracle = miracleTypes[0].id;
++    }
++
++    function launchMiracle(star) {
++      if (!activeMiracle) return;
++      const m = createMiracle(star.x, star.y, activeMiracle);
++      if (activeMiracle === 'speed') {
++        m.vx = star.vx * 2; m.vy = star.vy * 2;
++      } else if (activeMiracle === 'homing') {
++        m.target = target;
++      }
++      miracles.push(m);
++      combo++;
++      updateScore(10 * combo);
++    }
++
++    function updateScore(delta) {
++      score += delta;
++      scoreEl.textContent = score;
++    }
++
++    function checkWin() {
++      if (score >= 500) {
++        gameState = 'won';
++        overlayText.innerHTML = '<div class="win-text">미라클 마스터!<br>승리했습니다!</div>';
++        overlay.style.display = 'flex';
++      }
++    }
++
++    function checkLose() {
++      if (stars.length === 0 && miracles.length === 0) {
++        gameState = 'lost';
++        overlayText.innerHTML = '<div class="lose-text">스타가 모두 사라졌습니다.<br>패배했습니다.</div>';
++        overlay.style.display = 'flex';
++      }
++    }
++
++    function resetGame() {
++      score = 0;
++      combo = 0;
++      stars = [];
++      miracles = [];
++      particles = [];
++      miracleQueue = [];
++      gameState = 'playing';
++      scoreEl.textContent = score;
++      overlay.style.display = 'none';
++      // Reset stars
++      for (let i = 0; i < 3; i++) {
++        stars.push(createStar(canvas.width/2 + i*60 - 60, canvas.height/2));
++      }
++    }
++
++    function startGame() {
++      resetGame();
++      setupMiracleButtons();
++      gameLoop();
++    }
++
++    restartBtn.addEventListener('click', startGame);
++
++    canvas.addEventListener('mousedown', (e) => {
++      if (gameState !== 'playing') return;
++      const rect = canvas.getBoundingClientRect();
++      const mx = e.clientX - rect.left;
++      const my = e.clientY - rect.top;
++      // Find closest star
++      let closest = null;
++      let minDist = Infinity;
++      for (const s of stars) {
++        const d = Math.hypot(s.x - mx, s.y - my);
++        if (d < minDist && d < 50) {
++          minDist = d;
++          closest = s;
++        }
++      }
++      if (closest) {
++        dragStart = { x: mx, y: my };
++        target = closest;
++      }
++    });
++
++    canvas.addEventListener('mousemove', (e) => {
++      if (!dragStart || !target) return;
++      const rect = canvas.getBoundingClientRect();
++      const mx = e.clientX - rect.left;
++      const my = e.clientY - rect.top;
++      dragEnd = { x: mx, y: my };
++    });
++
++    canvas.addEventListener('mouseup', (e) => {
++      if (!dragStart || !target) return;
++      const rect = canvas.getBoundingClientRect();
++      const mx = e.clientX - rect.left;
++      const my = e.clientY - rect.top;
++      const dx = mx - dragStart.x;
++      const dy = my - dragStart.y;
++      const dist = Math.hypot(dx, dy);
++      if (dist > 10) {
++        target.vx = dx * 0.05;
++        target.vy = dy * 0.05;
++        // Launch miracle immediately after path adjustment
++        launchMiracle(target);
++      }
++      dragStart = null;
++      dragEnd = null;
++      target = null;
++    });
++
++    canvas.addEventListener('touchstart', (e) => {
++      e.preventDefault();
++      const touch = e.touches[0];
++      const rect = canvas.getBoundingClientRect();
++      const mx = touch.clientX - rect.left;
++      const my = touch.clientY - rect.top;
++      let closest = null;
++      let minDist = Infinity;
++      for (const s of stars) {
++        const d = Math.hypot(s.x - mx, s.y - my);
++        if (d < minDist && d < 50) {
++          minDist = d;
++          closest = s;
++        }
++      }
++      if (closest) {
++        dragStart = { x: mx, y: my };
++        target = closest;
++      }
++    }, { passive: false });
++
++    canvas.addEventListener('touchmove', (e) => {
++      e.preventDefault();
++      if (!dragStart || !target) return;
++      const touch = e.touches[0];
++      const rect = canvas.getBoundingClientRect();
++      const mx = touch.clientX - rect.left;
++      const my = touch.clientY - rect.top;
++      dragEnd = { x: mx, y: my };
++    }, { passive: false });
++
++    canvas.addEventListener('touchend', (e) => {
++      e.preventDefault();
++      if (!dragStart || !target) return;
++      const touch = e.changedTouches[0];
++      const rect = canvas.getBoundingClientRect();
++      const mx = touch.clientX - rect.left;
++      const my = touch.clientY - rect.top;
++      const dx = mx - dragStart.x;
++      const dy = my - dragStart.y;
++      const dist = Math.hypot(dx, dy);
++      if (dist > 10) {
++        target.vx = dx * 0.05;
++        target.vy = dy * 0.05;
++        launchMiracle(target);
++      }
++      dragStart = null;
++      dragEnd = null;
++      target = null;
++    }, { passive: false });
++
++    // Keyboard controls
++    window.addEventListener('keydown', (e) => {
++      if (gameState !== 'playing') return;
++      if (e.key === ' ') {
++        e.preventDefault();
++        // Launch miracle toward center
++        if (target) {
++          launchMiracle(target);
++        }
++      }
++      if (e.key === 'ArrowLeft' || e.key === 'a') {
++        if (target) target.vx -= 0.5;
++      }
++      if (e.key === 'ArrowRight' || e.key === 'd') {
++        if (target) target.vx += 0.5;
++      }
++      if (e.key === 'ArrowUp' || e.key === 'w') {
++        if (target) target.vy -= 0.5;
++      }
++      if (e.key === 'ArrowDown' || e.key === 's') {
++        if (target) target.vy += 0.5;
++      }
++    });
++
++    function gameLoop() {
++      if (gameState !== 'playing') return;
++
++      // Update stars
++      for (let i = stars.length - 1; i >= 0; i--) {
++        const s = stars[i];
++        s.trail.push({x: s.x, y: s.y});
++        if (s.trail.length > 10) s.trail.shift();
++        s.x += s.vx;
++        s.y += s.vy;
++        // Boundary check
++        if (s.x < 0 || s.x > canvas.width || s.y < 0 || s.y > canvas.height) {
++          stars.splice(i, 1);
++          for (let j = 0; j < 5; j++) {
++            particles.push(createParticle(s.x, s.y, s.color));
++          }
++        }
++      }
++
++      // Update miracles
++      for (let i = miracles.length - 1; i >= 0; i--) {
++        const m = miracles[i];
++        if (m.type === 'speed') {
++          m.x += m.vx;
++          m.y += m.vy;
++        } else if (m.type === 'homing' && m.target) {
++          const dx = m.target.x - m.x;
++          const dy = m.target.y - m.y;
++          const dist = Math.hypot(dx, dy);
++          if (dist > 0) {
++            m.vx += (dx/dist) * 0.3;
++            m.vy += (dy/dist) * 0.3;
++          }
++          m.x += m.vx;
++          m.y += m.vy;
++          if (dist < 20) {
++            // Hit target
++            for (let j = 0; j < 10; j++) {
++              particles.push(createParticle(m.x, m.y, '#00ffff'));
++            }
++            miracles.splice(i, 1);
++            updateScore(50);
++            continue;
++          }
++        } else if (m.type === 'split') {
++          // Split into multiple stars
++          for (let j = 0; j < 3; j++) {
++            const angle = (j * 120) * Math.PI / 180;
++            stars.push({
++              x: m.x, y: m.y,
++              vx: Math.cos(angle) * 3, vy: Math.sin(angle) * 3,
++              radius: 10, color: '#44ccff', trail: []
++            });
++          }
++          miracles.splice(i, 1);
++          updateScore(30);
++          continue;
++        } else if (m.type === 'bomb') {
++          // Explode and remove nearby stars
++          for (let j = stars.length - 1; j >= 0; j--) {
++            const s = stars[j];
++            const d = Math.hypot(s.x - m.x, s.y - m.y);
++            if (d < 60) {
++              stars.splice(j, 1);
++              for (let k = 0; k < 8; k++) {
++                particles.push(createParticle(s.x, s.y, '#ff0000'));
++              }
++              updateScore(20);
++            }
++          }
++          miracles.splice(i, 1);
++          continue;
++        }
++        m.life--;
++        if (m.life <= 0) {
++          miracles.splice(i, 1);
++        }
++      }
++
++      // Update particles
++      for (let i = particles.length - 1; i >= 0; i--) {
++        const p = particles[i];
++        p.x += p.vx;
++        p.y += p.vy;
++        p.life--;
++        if (p.life <= 0) {
++          particles.splice(i, 1);
++        }
++      }
++
++      // Spawn new stars occasionally
++      if (Math.random() < 0.02 && stars.length < 5) {
++        stars.push(createStar(Math.random() * canvas.width, 50));
++      }
++
++      // Draw everything
++      ctx.clearRect(0, 0, canvas.width, canvas.height);
++
++      // Draw stars
++      for (const s of stars) {
++        // Draw trail
++        for (let j = 0; j < s.trail.length; j++) {
++          const t = s.trail[j];
++          const alpha = j / s.trail.length;
++          ctx.fillStyle = `rgba(68, 170, 255, ${alpha * 0.5})`;
++          ctx.beginPath();
++          ctx.arc(t.x, t.y, s.radius * alpha, 0, Math.PI * 2);
++          ctx.fill();
++        }
++        // Draw star
++        ctx.fillStyle = s.color;
++        ctx.beginPath();
++        ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
++        ctx.fill();
++        // Glow
++        ctx.shadowBlur = 15;
++        ctx.shadowColor = s.color;
++        ctx.fill();
++        ctx.shadowBlur = 0;
++      }
++
++      // Draw miracles
++      for (const m of miracles) {
++        ctx.fillStyle = m.type === 'speed' ? '#ff8800' : m.type === 'homing' ? '#00ffff' : m.type === 'split' ? '#ff00ff' : '#ff0000';
++        ctx.beginPath();
++        ctx.arc(m.x, m.y, m.radius, 0, Math.PI * 2);
++        ctx.fill();
++        ctx.shadowBlur = 10;
++        ctx.shadowColor = ctx.fillStyle;
++        ctx.fill();
++        ctx.shadowBlur = 0;
++      }
++
++      // Draw particles
++      for (const p of particles) {
++        ctx.fillStyle = p.color;
++        ctx.globalAlpha = p.life / 30;
++        ctx.beginPath();
++        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
++        ctx.fill();
++        ctx.globalAlpha = 1;
++      }
++
++      // Draw drag line
++      if (dragStart && target) {
++        ctx.strokeStyle = '#ff4444';
++        ctx.lineWidth = 3;
++        ctx.setLineDash([5, 5]);
++        ctx.beginPath();
++        ctx.moveTo(dragStart.x, dragStart.y);
++        ctx.lineTo(target.x, target.y);
++        ctx.stroke();
++        ctx.setLineDash([]);
++      }
++
++      checkWin();
++      checkLose();
++
++      requestAnimationFrame(gameLoop);
++    }
++
++    // Start game on load
++    window.startGame = startGame;
++    startGame();
++  </script>
++</body>
++</html>
++
++diff --git a/README.md b/README.md
++new file mode 100644
++index 0000000..a1b2c3d
++--- /dev/null
++++ b/README.md
+@@ -0,0 +1,5 @@
++# Star Counter
++
++Physics puzzle game where players adjust star paths to launch miracles strategically.
++
++## How to Play
++Drag stars to set their trajectory, then launch miracles to maximize score. Reach 500 points to win!
++diff --git a/CHANGELOG.md b/CHANGELOG.md
++new file mode 100644
++index 0000000..d4e5f6a
++--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,8 @@
++# Changelog
++
++## [Alpha] - Fix Pass
++### Added
++- Complete HTML5 canvas implementation of Star Counter
++- Physics-based star movement with drag controls
++- Four miracle types: Speed, Split, Homing, Bomb
++- Score tracking with combo system
++- Win/lose states with overlay UI
++- Responsive design down to 360px
++- Keyboard and touch controls
++
++diff --git a/package.json b/package.json
++new file mode 100644
++index 0000000..f7e8d9c
++--- /dev/null
++++ b/package.json
+@@ -0,0 +1,10 @@
++{
++  "name": "star-counter",
++  "version": "1.0.0",
++  "description": "Physics puzzle game - adjust star paths to launch miracles",
++  "scripts": {
++    "start": "open index.html"
++  },
++  "license": "MIT"
++}
